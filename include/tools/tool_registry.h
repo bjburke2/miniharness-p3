@@ -70,4 +70,8 @@ private:
     // Your buckets, your element count, and any private helpers you want
     // (for example a rehash function). Store std::unique_ptr<Tool> in the
     // buckets so that pointers handed out by find() survive a resize.
+    std::vector<std::vector<std::unique_ptr<Tool>>> buckets_;
+    std::size_t count_ = 0;
+
+    void rehash(std::size_t new_bucket_count);
 };
