@@ -1,6 +1,7 @@
 # Project 3 Design Log
-**Author:** Brendan Burke · **P2 code used:** my own
-**Tools used:** Claude double checked the code and provided a draft for this design log. I used it for the git/WSL setup help too. I then ran the full test suite and revised this log so it reflects what I understand.
+**Author:** Brendan Burke ·
+**P2 code used:** my own
+**Tools used:** Claude double checked the code and provided a draft for this design log. I used it for the git/WSL setup help too. 
 
 ## 1. Hash table
 I chose **separate chaining**: each bucket is a `std::vector<std::unique_ptr<Tool>>`. P3 never removes tools and the table stays small, so chaining is simple and its load factor can safely approach 1. Open addressing would need a threshold well below 1 or `find` on a missing name could loop forever.
