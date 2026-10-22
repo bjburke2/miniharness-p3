@@ -1,6 +1,6 @@
 # Project 3 Design Log
-**Author:** Brendan Burke · **P2 code used:** my own
-**Tools used:** Claude double checked the code and provided a draft for this design log. I used it for the git/WSL setup help too. 
+**Author:** <your name> · **P2 code used:** my own
+**Tools used:** Claude (an AI assistant) wrote the code for `ToolRegistry`, `Workspace::resolve`, `calc_evaluate` and my tests in `tests/p3/test_p3.cpp`, plus a first draft of this log. It also helped with the git and WSL setup. I read the code, ran the test suites myself, and edited this log.
 
 ## 1. Hash table
 I used **open addressing with linear probing**. The table is one flat array of slots (`std::vector<std::unique_ptr<Tool>>`). A null slot is empty. P3 never removes a tool, so I don't need tombstones. The price is that clusters can grow, so I keep the table sparse.
@@ -21,7 +21,7 @@ The load factor ended at 0.31 because 10,000 sits just past the point where the 
 `add()` is amortized O(1). Most inserts probe only a few slots. A doubling costs O(n) but happens only after the table has gained n/2 more entries, so spreading the total (n + n/2 + n/4 + …, under 2n) across all inserts leaves a constant cost per insert.
 
 ## 2. Pointer stability
-The table stores `unique_ptr<Tool>`, so each `Tool` is a separate heap object that the slots only point to. `grow()` allocates a new slot array and moves each `unique_ptr` into it. That moves a pointer value, not the tool, so every `Tool*` handed out by `find()` still points to the same object. A test saves 100 pointers while the table grows and compares them to later `find()` results.
+The table stores `unique_ptr<Tool>`, so each `Tool` is a separate heap object that the slots only point to. `grow()` allocates a new slot array and moves each `unique_ptr` into it. That moves a pointer value, not the tool, so every `Tool*` handed out by `find()` still points to the same object. My 10,000-tool test records the first tool's pointer and checks that `find()` returns the same address after all the resizes.
 
 ## 3. Calculator trace
 I use a `nums` stack and a `pending` operator stack. For `2 * (3 + 4) - 5` (stacks listed bottom to top):
