@@ -13,84 +13,95 @@ namespace {
 
 using Kind = CalcToken::Kind;
 
-int precedence(Kind k) {
-    return (k == Kind::Times || k == Kind::Divide) ? 2 : 1;
-}
-
-bool is_operator(Kind k) {
-    return k == Kind::Plus || k == Kind::Minus || k == Kind::Times || k == Kind::Divide;
-}
-
-bool apply_top(std::vector<double>& values, std::vector<Kind>& ops, std::string* error) {
-    if (ops.empty() || values.size() < 2 || !is_operator(ops.back())) {
-        *error = "malformed expression";
-        return false;
+int rank(Kind k) {
+    switch (k) {
+        case Kind::Times:
+        case Kind::Divide: return 2;
+        case Kind::Plus:
+        case Kind::Minus:  return 1;
+        default:           return 0;
     }
-    Kind op = ops.back();
-    ops.pop_back();
-    double right = values.back();
-    values.pop_back();
-    double left = values.back();
-    values.pop_back();
-    double result = 0.0;
-    switch (op) {
-        case Kind::Plus:   result = left + right; break;
-        case Kind::Minus:  result = left - right; break;
-        case Kind::Times:  result = left * right; break;
-        case Kind::Divide:
-            if (right == 0.0) {
-                *error = "division by zero";
-                return false;
-            }
-            result = left / right;
-            break;
-        default:
-            *error = "malformed expression";
+}
+
+struct Machine {
+    std::vector<double> nums;
+    std::vector<Kind> pending;
+    std::string problem;
+
+    bool reduce_once() {
+        if (pending.empty() || rank(pending.back()) == 0 || nums.size() < 2) {
+            problem = "malformed expression";
             return false;
+        }
+        const Kind op = pending.back();
+        pending.pop_back();
+        const double rhs = nums.back();
+        nums.pop_back();
+        const double lhs = nums.back();
+        nums.pop_back();
+        if (op == Kind::Divide && rhs == 0.0) {
+            problem = "division by zero";
+            return false;
+        }
+        double value = 0.0;
+        if (op == Kind::Plus) value = lhs + rhs;
+        else if (op == Kind::Minus) value = lhs - rhs;
+        else if (op == Kind::Times) value = lhs * rhs;
+        else value = lhs / rhs;
+        nums.push_back(value);
+        return true;
     }
-    values.push_back(result);
-    return true;
-}
+
+    bool reduce_while(int floor) {
+        while (!pending.empty() && rank(pending.back()) >= floor) {
+            if (!reduce_once()) return false;
+        }
+        return true;
+    }
+};
 
 }  // namespace
 
 bool calc_evaluate(const std::vector<CalcToken>& tokens, double* out,
                    std::string* error) {
-    std::vector<double> values;
-    std::vector<Kind> ops;
-    for (const CalcToken& t : tokens) {
-        if (t.kind == Kind::Number) {
-            values.push_back(t.value);
-        } else if (t.kind == Kind::LParen) {
-            ops.push_back(Kind::LParen);
-        } else if (t.kind == Kind::RParen) {
-            while (!ops.empty() && ops.back() != Kind::LParen) {
-                if (!apply_top(values, ops, error)) return false;
-            }
-            if (ops.empty()) {
-                *error = "unbalanced parentheses";
-                return false;
-            }
-            ops.pop_back();
-        } else {
-            while (!ops.empty() && ops.back() != Kind::LParen &&
-                   precedence(ops.back()) >= precedence(t.kind)) {
-                if (!apply_top(values, ops, error)) return false;
-            }
-            ops.push_back(t.kind);
-        }
-    }
-    while (!ops.empty()) {
-        if (ops.back() == Kind::LParen) {
-            *error = "unbalanced parentheses";
-            return false;
-        }
-        if (!apply_top(values, ops, error)) return false;
-    }
-    if (values.size() != 1) {
-        *error = "malformed expression";
+    Machine m;
+    auto fail = [&]() {
+        *error = m.problem;
         return false;
+    };
+
+    for (const CalcToken& tok : tokens) {
+        switch (tok.kind) {
+            case Kind::Number:
+                m.nums.push_back(tok.value);
+                break;
+            case Kind::LParen:
+                m.pending.push_back(Kind::LParen);
+                break;
+            case Kind::RParen:
+                if (!m.reduce_while(1)) return fail();
+                if (m.pending.empty()) {
+                    m.problem = "unbalanced parentheses";
+                    return fail();
+                }
+                m.pending.pop_back();
+                break;
+            default:
+                if (!m.reduce_while(rank(tok.kind))) return fail();
+                m.pending.push_back(tok.kind);
+                break;
+        }
     }
-    *out = values.back();
+
+    if (!m.reduce_while(1)) return fail();
+    if (!m.pending.empty()) {
+        m.problem = "unbalanced parentheses";
+        return fail();
+    }
+    if (m.nums.size() != 1) {
+        m.problem = "malformed expression";
+        return fail();
+    }
+    *out = m.nums.back();
     return true;
 }

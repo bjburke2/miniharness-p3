@@ -8,42 +8,47 @@
 #include "tools/workspace.h"
 
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
 bool Workspace::resolve(std::string_view user_path, fs::path* out,
                         std::string* reason) const {
-    if (user_path.empty()) {
-        *reason = "empty path";
+    auto reject = [reason](const std::string& why) {
+        *reason = why;
         return false;
-    }
+    };
+
+    if (user_path.empty()) return reject("empty path");
     if (user_path.find('\0') != std::string_view::npos) {
-        *reason = "path contains a NUL character";
-        return false;
+        return reject("path contains a NUL byte");
     }
+
     try {
-        fs::path p{std::string(user_path)};
-        if (p.is_absolute() || p.has_root_path()) {
-            *reason = "absolute paths are not allowed: " + std::string(user_path);
-            return false;
+        const fs::path given{std::string(user_path)};
+        if (given.is_absolute() || given.has_root_path()) {
+            return reject("absolute paths are not allowed: " + std::string(user_path));
         }
-        fs::path n = p.lexically_normal();
-        if (n.empty()) {
-            *reason = "empty path";
-            return false;
+
+        std::vector<std::string> kept;
+        for (const fs::path& piece : given) {
+            const std::string part = piece.string();
+            if (part.empty() || part == ".") continue;
+            if (part == "..") {
+                if (kept.empty()) {
+                    return reject("path climbs out of the workspace: " + std::string(user_path));
+                }
+                kept.pop_back();
+                continue;
+            }
+            kept.push_back(part);
         }
-        if (*n.begin() == "..") {
-            *reason = "path escapes the workspace: " + std::string(user_path);
-            return false;
-        }
-        if (n == ".") {
-            *out = root();
-        } else {
-            *out = root() / n;
-        }
+
+        fs::path result = root();
+        for (const std::string& part : kept) result /= part;
+        *out = result;
         return true;
     } catch (...) {
-        *reason = "invalid path: " + std::string(user_path);
-        return false;
+        return reject("invalid path: " + std::string(user_path));
     }
 }

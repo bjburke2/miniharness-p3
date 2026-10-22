@@ -105,85 +105,100 @@ TEST(calc_division_by_zero) {
 //   ws_<case>                     REQUIRED: every row of the table in spec §4.4
 //   calc_<case>                   left-to-right, parentheses, negatives
 
-TEST(reg_null_rejected) {
+TEST(reg_null_is_refused) {
     ToolRegistry r;
     CHECK(!r.add(nullptr));
     CHECK(r.size() == 0);
-    CHECK(r.find("anything") == nullptr);
+    REQUIRE(r.add(std::make_unique<NamedTool>("solo")));
+    CHECK(!r.add(nullptr));
+    CHECK(r.size() == 1);
 }
 
-TEST(reg_empty_table) {
+TEST(reg_fresh_table_numbers) {
     ToolRegistry r;
     CHECK(r.size() == 0);
-    CHECK(r.bucket_count() >= 1);
-    CHECK(r.bucket_count() <= 64);
+    CHECK(r.bucket_count() >= 1 && r.bucket_count() <= 64);
     CHECK(r.load_factor() == 0.0);
     CHECK(r.max_probe_length() == 0);
+    CHECK(r.find("") == nullptr);
+    CHECK(r.find("nothing_here") == nullptr);
 }
 
-TEST(reg_size_tracks_adds) {
+TEST(reg_size_after_each_step) {
     ToolRegistry r;
-    REQUIRE(r.add(std::make_unique<NamedTool>("a")));
+    REQUIRE(r.add(std::make_unique<NamedTool>("x")));
     CHECK(r.size() == 1);
-    CHECK(!r.add(std::make_unique<NamedTool>("a")));
+    CHECK(!r.add(std::make_unique<NamedTool>("x")));
     CHECK(r.size() == 1);
-    CHECK(!r.add(nullptr));
-    CHECK(r.size() == 1);
-    REQUIRE(r.add(std::make_unique<NamedTool>("b")));
+    REQUIRE(r.add(std::make_unique<NamedTool>("y")));
     CHECK(r.size() == 2);
+    CHECK(r.find("x") != nullptr);
+    CHECK(r.find("y") != nullptr);
+    CHECK(r.find("z") == nullptr);
 }
 
 TEST(reg_for_each_visits_each_once) {
     ToolRegistry r;
-    const char* names[] = {"one", "two", "three", "four", "five", "six", "seven"};
-    for (const char* n : names) REQUIRE(r.add(std::make_unique<NamedTool>(n)));
-    std::vector<std::string> seen;
-    r.for_each([&](const Tool& t) { seen.push_back(t.name()); });
-    CHECK(seen.size() == 7);
-    for (const char* n : names) {
-        int count = 0;
-        for (const std::string& s : seen) {
-            if (s == n) ++count;
+    std::vector<std::string> names = {"read", "write", "list", "calc", "echo", "time", "dice", "sort", "grep"};
+    for (const std::string& n : names) REQUIRE(r.add(std::make_unique<NamedTool>(n)));
+    std::vector<int> visits(names.size(), 0);
+    int total = 0;
+    r.for_each([&](const Tool& t) {
+        ++total;
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (t.name() == names[i]) ++visits[i];
         }
-        CHECK(count == 1);
-    }
+    });
+    CHECK(total == static_cast<int>(names.size()));
+    for (int v : visits) CHECK(v == 1);
 }
 
-TEST(reg_hash_is_order_sensitive_and_full_width) {
+TEST(reg_hash_properties) {
     CHECK(ToolRegistry::hash("ab") != ToolRegistry::hash("ba"));
-    CHECK(ToolRegistry::hash("tool_1234") != ToolRegistry::hash("tool_1243"));
     CHECK(ToolRegistry::hash("abc") == ToolRegistry::hash("abc"));
-    std::vector<std::size_t> hashes;
-    for (int i = 0; i < 10000; ++i) hashes.push_back(ToolRegistry::hash("tool_" + std::to_string(i)));
-    std::sort(hashes.begin(), hashes.end());
-    hashes.erase(std::unique(hashes.begin(), hashes.end()), hashes.end());
-    CHECK(hashes.size() >= 9990);
+    CHECK(ToolRegistry::hash("tool_12") != ToolRegistry::hash("tool_21"));
+    CHECK(ToolRegistry::hash("a") != ToolRegistry::hash("a "));
+    std::vector<std::size_t> values;
+    for (int i = 0; i < 10000; ++i) values.push_back(ToolRegistry::hash("tool_" + std::to_string(i)));
+    std::sort(values.begin(), values.end());
+    values.erase(std::unique(values.begin(), values.end()), values.end());
+    CHECK(values.size() >= 9990);
+}
+
+TEST(reg_grows_and_keeps_pointers) {
+    ToolRegistry r;
+    std::size_t start = r.bucket_count();
+    std::vector<Tool*> ptrs;
+    for (int i = 0; i < 100; ++i) {
+        auto t = std::make_unique<NamedTool>("grow_" + std::to_string(i));
+        ptrs.push_back(t.get());
+        REQUIRE(r.add(std::move(t)));
+        CHECK(r.load_factor() <= 1.0);
+    }
+    CHECK(r.bucket_count() > start);
+    for (int i = 0; i < 100; ++i) CHECK(r.find("grow_" + std::to_string(i)) == ptrs[i]);
 }
 
 TEST(reg_10000_tools) {
     ToolRegistry r;
-    std::vector<std::string> names;
-    for (int i = 0; i < 10000; ++i) names.push_back("tool_" + std::to_string(i));
-
-    auto first = std::make_unique<NamedTool>(names[0]);
-    Tool* first_ptr = first.get();
-    REQUIRE(r.add(std::move(first)));
-
-    bool load_ok = true;
+    auto head = std::make_unique<NamedTool>("tool_0");
+    Tool* head_ptr = head.get();
+    REQUIRE(r.add(std::move(head)));
+    double worst_load = 0.0;
     for (int i = 1; i < 10000; ++i) {
-        REQUIRE(r.add(std::make_unique<NamedTool>(names[i])));
-        if (r.load_factor() > 1.0) load_ok = false;
+        REQUIRE(r.add(std::make_unique<NamedTool>("tool_" + std::to_string(i))));
+        worst_load = std::max(worst_load, r.load_factor());
     }
-    CHECK(load_ok);
+    CHECK(worst_load <= 1.0);
     CHECK(r.size() == 10000);
-    CHECK(r.find(names[0]) == first_ptr);
-    for (const std::string& n : names) {
-        Tool* t = r.find(n);
-        REQUIRE(t != nullptr);
-        CHECK(t->name() == n);
+    CHECK(r.find("tool_0") == head_ptr);
+    int missing = 0;
+    for (int i = 0; i < 10000; ++i) {
+        Tool* t = r.find("tool_" + std::to_string(i));
+        if (t == nullptr || t->name() != "tool_" + std::to_string(i)) ++missing;
     }
+    CHECK(missing == 0);
     CHECK(r.find("tool_10000") == nullptr);
-    CHECK(r.load_factor() <= 1.0);
     CHECK(r.max_probe_length() <= 64);
     std::printf("  [10000 tools] bucket_count=%zu load_factor=%.4f max_probe_length=%zu\n",
                 r.bucket_count(), r.load_factor(), r.max_probe_length());
@@ -192,57 +207,63 @@ TEST(reg_10000_tools) {
 TEST(reg_alternative_hash) {
     ToolRegistry r;
     for (int i = 0; i < 10000; ++i) REQUIRE(r.add(std::make_unique<NamedTool>("tool_" + std::to_string(i))));
-    std::size_t buckets = r.bucket_count();
-    std::vector<int> weak(buckets, 0);
-    std::vector<int> real(buckets, 0);
+    const std::size_t buckets = r.bucket_count();
+    std::vector<int> weak_counts(buckets, 0);
     for (int i = 0; i < 10000; ++i) {
-        std::string s = "tool_" + std::to_string(i);
-        std::size_t h = static_cast<unsigned char>(s[0]) + s.size();
-        ++weak[h % buckets];
-        ++real[ToolRegistry::hash(s) % buckets];
+        const std::string name = "tool_" + std::to_string(i);
+        const std::size_t weak = static_cast<unsigned char>(name[0]) + name.size();
+        ++weak_counts[weak % buckets];
     }
-    int weak_longest = *std::max_element(weak.begin(), weak.end());
-    int real_longest = *std::max_element(real.begin(), real.end());
-    std::printf("  [alternative hash] buckets=%zu  FNV-1a longest chain=%d  s[0]+size longest chain=%d\n",
-                buckets, real_longest, weak_longest);
-    CHECK(static_cast<std::size_t>(real_longest) == r.max_probe_length());
+    const int weak_longest = *std::max_element(weak_counts.begin(), weak_counts.end());
+    std::printf("  [alternative hash] real max_probe_length=%zu, weak hash s[0]+size longest chain=%d\n",
+                r.max_probe_length(), weak_longest);
     CHECK(weak_longest > 64);
+    CHECK(r.max_probe_length() <= 64);
 }
 
-TEST(ws_accepts_valid_paths) {
+TEST(ws_accepts_relative_paths) {
     TempDir d;
     Workspace ws(d.path());
     fs::path out;
     std::string reason;
-    REQUIRE(ws.resolve("notes/todo.txt", &out, &reason));
-    CHECK(out == ws.root() / "notes" / "todo.txt");
-    REQUIRE(ws.resolve("./notes//todo.txt", &out, &reason));
-    CHECK(out == ws.root() / "notes" / "todo.txt");
-    REQUIRE(ws.resolve(".", &out, &reason));
-    CHECK(out == ws.root());
-    REQUIRE(ws.resolve("a/../b", &out, &reason));
-    CHECK(out == ws.root() / "b");
-    REQUIRE(ws.resolve("a/..", &out, &reason));
-    CHECK(out == ws.root());
-    REQUIRE(ws.resolve("new/dir/file.txt", &out, &reason));
-    CHECK(out == ws.root() / "new" / "dir" / "file.txt");
-    REQUIRE(ws.resolve("my..notes.txt", &out, &reason));
-    CHECK(out == ws.root() / "my..notes.txt");
+    struct Row { const char* in; fs::path expect; };
+    const std::vector<Row> rows = {
+        {"notes/todo.txt", ws.root() / "notes" / "todo.txt"},
+        {"./notes//todo.txt", ws.root() / "notes" / "todo.txt"},
+        {".", ws.root()},
+        {"a/../b", ws.root() / "b"},
+        {"a/..", ws.root()},
+        {"new/dir/file.txt", ws.root() / "new" / "dir" / "file.txt"},
+        {"my..notes.txt", ws.root() / "my..notes.txt"},
+    };
+    for (const Row& row : rows) {
+        out.clear();
+        CHECK(ws.resolve(row.in, &out, &reason));
+        CHECK(out == row.expect);
+    }
 }
 
-TEST(ws_rejects_empty_and_nul) {
+TEST(ws_rejects_empty_path) {
     TempDir d;
     Workspace ws(d.path());
     fs::path out;
     std::string reason;
     CHECK(!ws.resolve("", &out, &reason));
     CHECK(!reason.empty());
-    reason.clear();
-    CHECK(!ws.resolve(std::string("notes") + '\0' + "/x", &out, &reason));
+}
+
+TEST(ws_rejects_nul_byte) {
+    TempDir d;
+    Workspace ws(d.path());
+    fs::path out;
+    std::string reason;
+    const std::string sneaky = std::string("notes") + '\0' + "/x";
+    CHECK(sneaky.size() == 8);
+    CHECK(!ws.resolve(sneaky, &out, &reason));
     CHECK(!reason.empty());
 }
 
-TEST(ws_rejects_absolute) {
+TEST(ws_rejects_absolute_paths) {
     TempDir d;
     Workspace ws(d.path());
     fs::path out;
@@ -250,86 +271,91 @@ TEST(ws_rejects_absolute) {
     CHECK(!ws.resolve("/etc/passwd", &out, &reason));
     CHECK(!reason.empty());
     reason.clear();
-    CHECK(!ws.resolve((ws.root() / "notes").string(), &out, &reason));
+    CHECK(!ws.resolve(ws.root().string() + "/notes/todo.txt", &out, &reason));
     CHECK(!reason.empty());
 }
 
-TEST(ws_rejects_dotdot) {
+TEST(ws_rejects_climbing_paths) {
     TempDir d;
     Workspace ws(d.path());
     fs::path out;
     std::string reason;
-    const char* bad[] = {"..", "../etc/passwd", "a/../../b"};
-    for (const char* b : bad) {
+    const std::vector<std::string> bad = {
+        "..",
+        "../etc/passwd",
+        "a/../../b",
+        "notes/../../" + ws.root().filename().string() + "/notes/todo.txt",
+    };
+    for (const std::string& b : bad) {
         reason.clear();
         CHECK(!ws.resolve(b, &out, &reason));
         CHECK(!reason.empty());
     }
-    reason.clear();
-    std::string sneaky = std::string("notes/../../") + ws.root().filename().string() + "/notes/todo.txt";
-    CHECK(!ws.resolve(sneaky, &out, &reason));
-    CHECK(!reason.empty());
 }
 
-TEST(ws_does_not_touch_filesystem) {
+TEST(ws_is_text_only) {
     TempDir d;
     Workspace ws(d.path());
     fs::path out;
     std::string reason;
-    REQUIRE(ws.resolve("never/created/file.txt", &out, &reason));
+    REQUIRE(ws.resolve("ghost/folder/file.txt", &out, &reason));
     CHECK(!fs::exists(out));
-    CHECK(!fs::exists(ws.root() / "never"));
+    CHECK(!fs::exists(ws.root() / "ghost"));
 }
 
-TEST(calc_table_rows) {
-    double v = 0;
-    std::string err;
-    REQUIRE(eval("10 - 4 - 3", &v, &err));
-    CHECK(v == 3);
-    REQUIRE(eval("100 / 10 / 5", &v, &err));
-    CHECK(v == 2);
-    REQUIRE(eval("(2 + 3) * 4", &v, &err));
-    CHECK(v == 20);
-    REQUIRE(eval("2 * (3 + 4) - 5", &v, &err));
-    CHECK(v == 9);
-    REQUIRE(eval("-3 * -3", &v, &err));
-    CHECK(v == 9);
-    REQUIRE(eval("7 / 2", &v, &err));
-    CHECK(v == 3.5);
+TEST(calc_spec_table) {
+    struct Row { const char* expr; double expect; };
+    const std::vector<Row> rows = {
+        {"2 + 3 * 4", 14},
+        {"10 - 4 - 3", 3},
+        {"100 / 10 / 5", 2},
+        {"(2 + 3) * 4", 20},
+        {"2 * (3 + 4) - 5", 9},
+        {"-3 * -3", 9},
+        {"7 / 2", 3.5},
+    };
+    for (const Row& row : rows) {
+        double v = 0;
+        std::string err;
+        CHECK(eval(row.expr, &v, &err));
+        CHECK(v == row.expect);
+    }
 }
 
-TEST(calc_division_by_zero_in_parens) {
+TEST(calc_zero_divisor_from_parens) {
     double v = 0;
     std::string err;
     CHECK(!eval("1 / (2 - 2)", &v, &err));
     CHECK(err == "division by zero");
+    CHECK(!eval("5 + 8 / (3 - 3) * 2", &v, &err));
+    CHECK(err == "division by zero");
 }
 
-TEST(calc_own_expressions) {
+TEST(calc_more_expressions) {
     double v = 0;
     std::string err;
-    REQUIRE(eval("1.5 + 2.25 * 2", &v, &err));
-    CHECK(v == 6);
-    REQUIRE(eval("((2))", &v, &err));
+    REQUIRE(eval("8 / 4 / 2 + 1", &v, &err));
     CHECK(v == 2);
-    REQUIRE(eval("2 - (3 - 4) * -2", &v, &err));
-    CHECK(v == 0);
-    REQUIRE(eval("42", &v, &err));
-    CHECK(v == 42);
+    REQUIRE(eval("(1 + 2) * (3 + 4)", &v, &err));
+    CHECK(v == 21);
+    REQUIRE(eval("((((5))))", &v, &err));
+    CHECK(v == 5);
+    REQUIRE(eval("0.5 * 4 - -1", &v, &err));
+    CHECK(v == 3);
+    REQUIRE(eval("9", &v, &err));
+    CHECK(v == 9);
 }
 
-TEST(calc_very_long_expressions) {
+TEST(calc_huge_inputs_do_not_overflow_stack) {
     double v = 0;
     std::string err;
-    std::string plus = "1";
-    for (int i = 0; i < 20000; ++i) plus += "+1";
-    REQUIRE(eval(plus, &v, &err));
-    CHECK(v == 20001);
-    std::string nested(5000, '(');
-    nested += "1";
-    nested += std::string(5000, ')');
-    REQUIRE(eval(nested, &v, &err));
-    CHECK(v == 1);
+    std::string flat = "0";
+    for (int i = 0; i < 20000; ++i) flat += " + 1";
+    REQUIRE(eval(flat, &v, &err));
+    CHECK(v == 20000);
+    const std::string deep = std::string(5000, '(') + "7" + std::string(5000, ')');
+    REQUIRE(eval(deep, &v, &err));
+    CHECK(v == 7);
 }
 
 int main(int argc, char** argv) { return mt::run_all(argc, argv); }

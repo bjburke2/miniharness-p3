@@ -1,47 +1,46 @@
 # Project 3 Design Log
-**Author:** Brendan Burke ·
-**P2 code used:** my own
+**Author:** Brendan Burke · **P2 code used:** my own
 **Tools used:** Claude double checked the code and provided a draft for this design log. I used it for the git/WSL setup help too. 
 
 ## 1. Hash table
-I chose **separate chaining**: each bucket is a `std::vector<std::unique_ptr<Tool>>`. P3 never removes tools and the table stays small, so chaining is simple and its load factor can safely approach 1. Open addressing would need a threshold well below 1 or `find` on a missing name could loop forever.
+I used **open addressing with linear probing**. The table is one flat array of slots (`std::vector<std::unique_ptr<Tool>>`). A null slot is empty. P3 never removes a tool, so I don't need tombstones. The price is that clusters can grow, so I keep the table sparse.
 
-The hash is **64-bit FNV-1a**. It XORs in each byte and then multiplies, so it uses every character and is order-sensitive (`"ab"` and `"ba"` differ). It returns the full-width value, and the index is `hash % bucket_count()`.
+The hash starts from a nonzero seed. For each byte it XORs the byte in, multiplies by the FNV prime, and folds the high bits down with `h ^= h >> 29`. A final avalanche step (shift, multiply, shift) finishes it. It uses every character, depends on order (`"ab"` and `"ba"` differ), and returns the full 64-bit value. The slot index is `hash & (slots - 1)`, so the table size is always a power of two, starting at 16. The mixing matters because linear probing suffers when similar keys land next to each other.
 
-The table starts with 8 buckets. Before inserting, if `(size + 1) / buckets` would exceed **0.75**, I double the bucket count and re-insert every entry using the new count. I checked before inserting so the load factor never overshoots, and 0.75 keeps chains short at the cost of some empty buckets.
+The **maximum load factor is 0.5**. Before inserting, if `(used + 1) * 2` would exceed the slot count, I double the table and re-insert everything. I chose 0.5 because open addressing must stay below 1 (a full table makes `find` loop forever on a missing name), and at 0.5 an unsuccessful search needs only a couple of probes on average.
 
 | 10,000 tools `tool_0`…`tool_9999` | Result |
 |---|---|
-| `bucket_count()` | 16,384 |
-| `load_factor()` | 0.6104 |
-| `max_probe_length()` (FNV-1a) | 6 |
+| `bucket_count()` | 32,768 |
+| `load_factor()` | 0.3052 |
+| `max_probe_length()` (my hash) | 14 |
 | Longest chain, weak hash `s[0] + s.size()` | 9,000 |
 
-The weak hash collapses all the names onto a handful of buckets because every name starts with `t` and has only a few possible lengths. That is why a real hash matters.
+The load factor ended at 0.31 because 10,000 sits just past the point where the table doubled (16,384 slots would be 0.61). The weak hash gives 9,000 because every name starts with `t` and the length takes only a few values, so nearly all keys share a few indexes.
 
-`add()` is amortized O(1). A single insert is O(1) on average, but a resize costs O(n). Because the size doubles each time, the total resize work over n inserts is about n + n/2 + n/4 + … < 2n, so each insert pays a constant amount on average.
+`add()` is amortized O(1). Most inserts probe only a few slots. A doubling costs O(n) but happens only after the table has gained n/2 more entries, so spreading the total (n + n/2 + n/4 + …, under 2n) across all inserts leaves a constant cost per insert.
 
 ## 2. Pointer stability
-The buckets store `unique_ptr<Tool>`, so the `Tool` objects live on the heap, separate from the bucket arrays. During `rehash` I only `std::move` the smart pointers into the new array. The `Tool` objects themselves never move, so a `Tool*` from `find()` remains valid. My 10,000-tool test checks that the pointer from the first insert equals `find()` after the last insert.
+The table stores `unique_ptr<Tool>`, so each `Tool` is a separate heap object that the slots only point to. `grow()` allocates a new slot array and moves each `unique_ptr` into it. That moves a pointer value, not the tool, so every `Tool*` handed out by `find()` still points to the same object. A test saves 100 pointers while the table grows and compares them to later `find()` results.
 
 ## 3. Calculator trace
-For `2 * (3 + 4) - 5`, with `values` and `ops` listed bottom to top:
+I use a `nums` stack and a `pending` operator stack. For `2 * (3 + 4) - 5` (stacks listed bottom to top):
 
-1. `2`: push on `values`. values `[2]`, ops `[]`.
-2. `*`: `ops` is empty, so push. values `[2]`, ops `[*]`.
-3. `(`: push. ops `[* (]`.
-4. `3`: push. values `[2 3]`.
-5. `+`: the top is `(`, so nothing is applied; push. ops `[* ( +]`.
-6. `4`: push. values `[2 3 4]`.
-7. `)`: apply `+`. Pop 4 (right), then 3 (left), compute 7. values `[2 7]`. The top is now `(`, so pop it. ops `[*]`.
-8. `-`: `*` has precedence 2, which is ≥ 1, so apply it: 2 × 7 = 14. values `[14]`, ops `[]`. Push `-`.
-9. `5`: push. values `[14 5]`.
-10. End of input: apply `-`: 14 − 5 = 9. values `[9]`.
+- `2`: goes onto `nums` → `[2]`.
+- `*`: nothing pending, so it is pushed → pending `[*]`.
+- `(`: pushed → pending `[* (]`.
+- `3`: `nums` `[2 3]`.
+- `+`: the top is `(`, which ranks 0 and blocks all reduction, so `+` is pushed → pending `[* ( +]`.
+- `4`: `nums` `[2 3 4]`.
+- `)`: reduce down to the `(`. Apply `+` to 3 and 4 to get 7 → `nums` `[2 7]`, pending `[* (]`. Discard the `(` → pending `[*]`.
+- `-`: it ranks 1 and `*` ranks 2, which is at least as high, so apply `*`: 2 × 7 = 14 → `nums` `[14]`. Then push `-`.
+- `5`: `nums` `[14 5]`.
+- End: apply the leftover `-` → 14 − 5 = 9.
 
-The answer is 9. The "≥" rule makes equal-precedence operators evaluate left to right.
+The `>=` comparison is what makes `10 - 4 - 3` come out as 3: the first `-` is applied before the second one is pushed.
 
 ## 4. Errors as values
-In an agent loop a tool failure is normal: the file is missing, the path is forbidden, or the expression divides by zero. The model is expected to read the error and try something else. Returning `ToolResult::failure(...)`, or `false` plus a message from `resolve` and `calc_evaluate`, treats that as ordinary data, and the caller can't forget to handle it the way it can forget a `catch`. Exceptions are the right choice for programmer errors, such as calling `as_string()` on a JSON number, where the code itself is wrong and should stop loudly. The dispatcher's catch-all is a last line of defense for those bugs.
+A failing tool call is an ordinary event in an agent loop: the model asks for a missing file, a forbidden path, or `1/0`. The model needs the message back as data so it can recover. Exceptions fit bugs and broken invariants, such as asking a JSON string for a number, where the program should stop and be fixed.
 
 ## 5. What I would design differently
-`add()` calls `find()` and then hashes the name again to pick a bucket, and `rehash` calls `tool->name()` for every entry. That builds a new `std::string` through a virtual call each time. In hindsight I would store a small node holding the name and its cached hash alongside the `unique_ptr`. That would hash each name only once and make resizing cheaper.
+`find()` and `grow()` call `tool->name()` often, and it returns a fresh `std::string` through a virtual call each time. Slots could hold a small entry with the name and a cached hash next to the `unique_ptr`, so probing could compare cached hashes first and growth would never recompute them.
