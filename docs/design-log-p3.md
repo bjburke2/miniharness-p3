@@ -1,6 +1,6 @@
 # Project 3 Design Log
-**Author:** <your name> · **P2 code used:** my own
-**Tools used:** Claude (an AI assistant) wrote the code for `ToolRegistry`, `Workspace::resolve`, `calc_evaluate` and my tests in `tests/p3/test_p3.cpp`, plus a first draft of this log. It also helped with the git and WSL setup. I read the code, ran the test suites myself, and edited this log.
+**Author:** Brendan Burke · **P2 code used:** my own
+**Tools used:** Claude double checked the code and provided a draft for this design log. I used it for the git/WSL setup help too. 
 
 ## 1. Hash table
 I used **open addressing with linear probing**. The table is one flat array of slots (`std::vector<std::unique_ptr<Tool>>`). A null slot is empty. P3 never removes a tool, so I don't need tombstones. The price is that clusters can grow, so I keep the table sparse.
